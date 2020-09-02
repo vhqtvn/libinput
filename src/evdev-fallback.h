@@ -64,6 +64,7 @@ struct mt_slot {
 	enum mt_slot_state state;
 	int32_t seat_slot;
 	struct device_coords point;
+	struct device_coords last_point;
 	struct device_coords hysteresis_center;
 	enum palm_state palm_state;
 };
@@ -71,6 +72,7 @@ struct mt_slot {
 struct fallback_dispatch {
 	struct evdev_dispatch base;
 	struct evdev_device *device;
+	struct tablet_axes axes; /* for assembling the current state */
 
 	struct libinput_device_config_calibration calibration;
 

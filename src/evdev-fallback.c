@@ -635,6 +635,10 @@ fallback_process_touch(struct fallback_dispatch *dispatch,
 		dispatch->pending_event |= EVDEV_ABSOLUTE_MT;
 		slot->dirty = true;
 		break;
+	case ABS_MT_PRESSURE:
+		dispatch->pending_event |= EVDEV_ABSOLUTE_MT;
+		dispatch->axes.pressure = e->value;
+		break;
 	case ABS_MT_TOOL_TYPE:
 		/* The transitions matter - we (may) need to send a touch
 		 * cancel event if we just switched to a palm touch. And the
@@ -884,7 +888,7 @@ fallback_flush_mt_events(struct fallback_dispatch *dispatch,
 			 struct evdev_device *device,
 			 uint64_t time)
 {
-	bool sent = false;
+	bool sent = false, update_state = true, is_down;
 
 	for (size_t i = 0; i < dispatch->mt.slots_len; i++) {
 		struct mt_slot *slot = &dispatch->mt.slots[i];
@@ -906,21 +910,36 @@ fallback_flush_mt_events(struct fallback_dispatch *dispatch,
 								time);
 			slot->palm_state = PALM_IS_PALM;
 		} else if (slot->palm_state == PALM_NONE) {
+			is_down = true;
+			if(!isnan(dispatch->axes.pressure)){
+				is_down = dispatch->axes.pressure >= 42;
+			}
 			switch (slot->state) {
 			case SLOT_STATE_BEGIN:
 				if (!fallback_arbitrate_touch(dispatch,
 							     slot)) {
-					sent = fallback_flush_mt_down(dispatch,
-								      device,
-								      i,
-								      time);
+					if(is_down) {
+						sent = fallback_flush_mt_down(dispatch,
+										device,
+										i,
+										time);
+					}else {
+						update_state = false;
+					}
 				}
 				break;
 			case SLOT_STATE_UPDATE:
-				sent = fallback_flush_mt_motion(dispatch,
-								device,
-								i,
-								time);
+				if(is_down) {
+					sent = fallback_flush_mt_motion(dispatch,
+									device,
+									i,
+									time);
+				}else{
+					sent = fallback_flush_mt_up(dispatch,
+									device,
+									i,
+									time);
+				}
 				break;
 			case SLOT_STATE_END:
 				sent = fallback_flush_mt_up(dispatch,
@@ -934,20 +953,25 @@ fallback_flush_mt_events(struct fallback_dispatch *dispatch,
 		}
 
 		/* State machine continues independent of the palm state */
-		switch (slot->state) {
-		case SLOT_STATE_BEGIN:
-			slot->state = SLOT_STATE_UPDATE;
-			break;
-		case SLOT_STATE_UPDATE:
-			break;
-		case SLOT_STATE_END:
-			slot->state = SLOT_STATE_NONE;
-			break;
-		case SLOT_STATE_NONE:
-			/* touch arbitration may swallow the begin,
-			 * so we may get updates for a touch still
-			 * in NONE state */
-			break;
+		if(update_state) {
+			switch (slot->state) {
+			case SLOT_STATE_BEGIN:
+				slot->state = SLOT_STATE_UPDATE;
+				break;
+			case SLOT_STATE_UPDATE:
+				if(!is_down) {
+					slot->state = SLOT_STATE_BEGIN;
+				}
+				break;
+			case SLOT_STATE_END:
+				slot->state = SLOT_STATE_NONE;
+				break;
+			case SLOT_STATE_NONE:
+				/* touch arbitration may swallow the begin,
+				* so we may get updates for a touch still
+				* in NONE state */
+				break;
+			}
 		}
 	}
 
@@ -1698,6 +1722,7 @@ fallback_dispatch_create(struct libinput_device *libinput_device)
 	struct fallback_dispatch *dispatch;
 
 	dispatch = zalloc(sizeof *dispatch);
+	dispatch->axes.pressure = NAN;
 	dispatch->device = evdev_device(libinput_device);
 	dispatch->base.dispatch_type = DISPATCH_FALLBACK;
 	dispatch->base.interface = &fallback_interface;
